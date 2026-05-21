@@ -1,0 +1,171 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+import os
+
+# 1. 設定網頁頁面配置
+st.set_page_config(page_title="生醫癌症基因臨床診斷面板", layout="wide")
+
+st.title("🧬 互動式癌症基因分群與線上診斷模擬器")
+st.write("利用真實 TCGA 數據庫之 RNA-Seq 基因表現量，透過 PCA 降維與 K-Means 演算法進行腫瘤分類與預測。")
+
+# ==========================================
+# 檔案直接放在本機端目錄下
+# ==========================================
+DATA_PATH = "data.csv"
+LABELS_PATH = "labels.csv"
+
+# 2. 智慧資料載入與本地快取機制（本機端超高速版）
+@st.cache_resource 
+def load_large_biological_data():
+    if not os.path.exists(DATA_PATH) or not os.path.exists(LABELS_PATH):
+        st.error("🚨 錯誤：在本機端找不到 data.csv 或 labels.csv，請確認檔案已放置在與 app.py 相同的資料夾中。")
+        st.stop()
+        
+    with st.spinner("正在讀取本機端生醫資料庫..."):
+        df_data = pd.read_csv(DATA_PATH)
+        df_labels = pd.read_csv(LABELS_PATH)
+    return df_data, df_labels
+
+# 執行載入與機器學習運算
+try:
+    df_data_raw, df_labels_raw = load_large_biological_data()
+    
+    # 3. 側邊欄參數設定 (Sidebar)
+    st.sidebar.header("⚙️ 演算法參數調整")
+    k_clusters = st.sidebar.slider("選擇 K-Means 分群數 (K)", min_value=2, max_value=10, value=5, step=1)
+    
+    # 4. 背景核心機器學習模型運算（快取處理）
+    @st.cache_resource
+    def train_models(df_data, df_labels, k_clusters):
+        sample_ids = df_data.iloc[:, 0].copy()
+        X = df_data.drop(["Unnamed: 0"], axis=1, errors='ignore')
+        X = X.drop(["gene_5"], axis=1, errors='ignore')
+        
+        # 標準化
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # PCA 降維
+        pca = PCA(n_components=3)
+        X_pca = pca.fit_transform(X_scaled)
+        
+        df_pca = pd.DataFrame(X_pca, columns=['PC1', 'PC2', 'PC3'])
+        df_pca['Sample_ID'] = sample_ids
+        df_pca['Real_Class'] = df_labels['Class']
+        
+        # K-Means 分群
+        kmeans = KMeans(n_clusters=k_clusters, random_state=42, n_init='auto')
+        y_means = kmeans.fit_predict(X_pca)
+        df_pca['Cluster_Result'] = y_means.astype(str)
+        
+        return scaler, pca, kmeans, df_pca, X.columns
+
+    scaler, pca, kmeans, df_pca, feature_columns = train_models(df_data_raw, df_labels_raw, k_clusters)
+
+    # 5. 網頁分頁配置
+    tab1, tab2, tab3 = st.tabs(["📊 1. 資料概覽與手肘法", "🎨 2. PCA 互動式降維視覺化", "🔮 3. 線上即時診斷模擬器"])
+
+    # --- 區塊 1 ---
+    with tab1:
+        st.subheader("📋 前處理後的基因表現量矩陣 (前五筆)")
+        display_df = df_data_raw.drop(["Unnamed: 0", "gene_5"], axis=1, errors='ignore')
+        st.dataframe(display_df.head(), use_container_width=True)
+        
+        col_m1, col_m2 = st.columns(2)
+        col_m1.metric(label="📊 總樣本數 (Patients)", value=display_df.shape[0])
+        col_m2.metric(label="🧬 有效基因特徵數 (Genes)", value=display_df.shape[1])
+        
+        st.markdown("---")
+        st.subheader("📈 手肘法 (Elbow Method) 最佳群數探索")
+        
+        @st.cache_data
+        def calculate_wcss(X_pca_data):
+            wcss_list = []
+            for i in range(1, 11):
+                km = KMeans(n_clusters=i, random_state=42, n_init='auto')
+                km.fit(X_pca_data)
+                wcss_list.append(km.inertia_)
+            return wcss_list
+        
+        wcss_values = calculate_wcss(df_pca[['PC1', 'PC2', 'PC3']].values)
+        df_wcss = pd.DataFrame({'群數 (K)': list(range(1, 11)), 'WCSS (群內平方和)': wcss_values})
+        fig_wcss = px.line(df_wcss, x='群數 (K)', y='WCSS (群內平方和)', markers=True)
+        st.plotly_chart(fig_wcss, use_container_width=True)
+
+    # --- 區塊 2 ---
+    with tab2:
+        st.subheader("🎬 互動式生醫特徵空間投影")
+        col_ctrl1, col_ctrl2 = st.columns(2)
+        with col_ctrl1:
+            dimension_mode = st.radio("🔄 切換圖表維度：", ["2D 散佈圖", "3D 旋轉散佈圖"], horizontal=True)
+        with col_ctrl2:
+            color_view = st.selectbox("👁️ 切換觀看視角 (圖表著色依據)：", ["K-Means 演算法分群的結果", "病患真實的癌症類別"])
+        
+        color_column = 'Cluster_Result' if color_view == "K-Means 演算法分群的結果" else 'Real_Class'
+        
+        if dimension_mode == "2D 散佈圖":
+            fig = px.scatter(
+                df_pca, x='PC1', y='PC2', color=color_column,
+                hover_data=['Sample_ID', 'Real_Class', 'Cluster_Result'],
+                title=f"2D PCA 投影圖 (著色: {color_view})",
+                color_discrete_sequence=px.colors.qualitative.Dark24
+            )
+            fig.update_traces(marker=dict(size=8, opacity=0.8))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            fig = px.scatter_3d(
+                df_pca, x='PC1', y='PC2', z='PC3', color=color_column,
+                hover_data=['Sample_ID', 'Real_Class', 'Cluster_Result'],
+                title=f"3D PCA 旋轉空間投影圖 (著色: {color_view})",
+                color_discrete_sequence=px.colors.qualitative.Dark24
+            )
+            fig.update_traces(marker=dict(size=4, opacity=0.8))
+            fig.update_layout(scene=dict(aspectmode='cube'))
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- 區塊 3 ---
+    with tab3:
+        st.subheader("🔮 臨床新樣本基因檢測與即時診斷")
+        st.write("請上傳新病人的基因表現量 CSV 檔案，系統將自動進行特徵對齊、降維並預測其最接近之癌症分群。")
+        
+        uploaded_file = st.file_uploader("選擇上傳新病人基因數據 (.csv)", type=["csv"])
+        
+        if uploaded_file is not None:
+            try:
+                df_new = pd.read_csv(uploaded_file)
+                new_samples = df_new.iloc[:, 0].values
+                X_new = df_new[feature_columns]
+                
+                X_new_scaled = scaler.transform(X_new)
+                X_new_pca = pca.transform(X_new_scaled)
+                preds = kmeans.predict(X_new_pca)
+                
+                df_res = pd.DataFrame({
+                    '病人編號 (Sample ID)': new_samples,
+                    'PCA - PC1': X_new_pca[:, 0].round(4),
+                    'PCA - PC2': X_new_pca[:, 1].round(4),
+                    '預測最接近群集群 (Predicted Cluster)': preds
+                })
+                
+                st.markdown("---")
+                st.subheader("🩺 診斷分析報告結果")
+                st.dataframe(df_res, use_container_width=True)
+                
+                for idx, row in df_res.iterrows():
+                    with st.expander(f"查看病人 {row['病人編號 (Sample ID)']} 詳細診斷建議"):
+                        st.markdown(f"### 🎯 預測歸類：**Cluster {row['預測最接近群集群 (Predicted Cluster)']}**")
+                        cluster_num = str(row['預測最接近群集群 (Predicted Cluster)'])
+                        most_common_cancer = df_pca[df_pca['Cluster_Result'] == cluster_num]['Real_Class'].mode()[0]
+                        st.warning(f"💡 臨床統計參考：在現有資料庫中，此群集主要聚集的真實癌症類型為 **{most_common_cancer}**。")
+                        st.write("建議臨床醫師結合此基因分群特徵，安排進一步的臨床診斷。")
+                        
+            except Exception as e:
+                st.error(f"❌ 解析錯誤：請確保上傳的檔案格式與欄位名稱完全正確。詳細錯誤: {str(e)}")
+
+except Exception as e:
+    st.error(f"🚨 錯誤：讀取本機端資料發生異常。詳細錯誤訊息: {str(e)}")
