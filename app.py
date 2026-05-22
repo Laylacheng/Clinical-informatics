@@ -11,15 +11,41 @@ import os
 st.set_page_config(page_title="生醫癌症基因臨床診斷面板", layout="wide")
 
 st.title("🧬 互動式癌症基因分群與線上診斷模擬器")
-st.write("利用真實 TCGA 數據庫之 RNA-Seq 基因表現量，透過 PCA 降維與 K-Means 演算法進行腫瘤分類與預測。")
+
+# ==========================================
+# 更新：實驗設計理念與資料集背景介紹區塊（加入 Kaggle 連結）
+# ==========================================
+with st.expander("📖 點擊展開：專案實驗設計理念與資料集背景介紹", expanded=True):
+    st.markdown("""
+    ### 🔬 1. 資料集來源與生醫背景
+    本專案採用的生醫數據源自於 Kaggle 公開數據庫的 [ICMR Cancer Gene Expression Data](https://www.kaggle.com/datasets/shibumohapatra/icmr-data)。
+    該資料集實質對接了著名的 **TCGA（The Cancer Genome Atlas，癌症基因體圖譜）** 數據庫。
+    資料集內共包含 **801 筆病患樣本**，每筆樣本皆擁有 **20,530 個基因的 RNA-Seq 表現量數據（Gene Expression Data）**。
+    這些樣本在臨床上已被證實分別屬於以下 **5 種不同的惡性腫瘤標籤（True Classes）**：
+    * **BRCA (Breast Cancer)**：乳腺癌
+    * **KIRC (Kidney Renal Cell Carcinoma)**：腎細胞癌
+    * **COAD (Colon Adenocarcinoma)**：結腸癌
+    * **LUAD (Lung Adenocarcinoma)**：肺腺癌
+    * **PRAD (Prostate Adenocarcinoma)**：前列腺癌
+
+    ### 🎯 2. 臨床痛點與實驗設計理念
+    * **高維度資料的臨床挑戰**：在現代精準醫療中，RNA-Seq 技術能同時檢測上萬個基因的表現量，但這種**「超高維度（High-Dimensional）」**的資料特性，通常有嚴重的雜訊與特徵讓臨床醫師不直觀地進行疾病分類或診斷。
+    * **PCA 技術**：本實驗的第一核心理念是利用 **主成分分析（PCA）** 演算法。PCA 能在不依賴任何臨床標籤的前提下，將 2 萬多維的基因特徵投影至 2 維或 3 維的關鍵主成分空間（PC Space），保留資料的變異量。
+    * **K-Means 演算法的分群驗證**：**K-Means 機器學習分群演算法**（無監督學習），讓電腦純粹根據降維後的幾何距離對病患進行自動分群。
+    * **臨床驗證核心（雙視角對比）**：本系統設計的重點在於**「演算法分群結果」與「臨床真實癌症標籤」的交叉比對**。若兩者的分布高度重合，即證明了利用 PCA 抓取的核心基因特徵，確實含有區分這五大癌症的關鍵生物學特徵。
+    * **線上即時診斷模擬**：另外加上這個線上模擬器，能將新病人的高維度基因矩陣即時對齊、標準化、降維並指派群集，模擬 AI 輔助臨床癌症篩檢的決策流程。
+    """)
+
+st.markdown("---")
 
 # ==========================================
 # 檔案直接放在本機端目錄下
 # ==========================================
 DATA_PATH = "data.csv"
 LABELS_PATH = "labels.csv"
+TEST_FILE_PATH = "new_patients_test.csv"  # 範例測試檔案路徑
 
-# 2. 智慧資料載入與本地快取機制（本機端超高速版）
+# 2. 智慧資料載入與本地快取機制
 @st.cache_resource 
 def load_large_biological_data():
     if not os.path.exists(DATA_PATH) or not os.path.exists(LABELS_PATH):
@@ -131,7 +157,24 @@ try:
     # --- 區塊 3 ---
     with tab3:
         st.subheader("🔮 臨床新樣本基因檢測與即時診斷")
-        st.write("請上傳新病人的基因表現量 CSV 檔案，系統將自動進行特徵對齊、降維並預測其最接近之癌症分群。")
+        st.write("請下載下方提供的範例資料集，或上傳您自己的新病人基因表現量 CSV 檔案（需包含相同的基因特徵欄位）。")
+        
+        # ==========================================
+        # 新增：提供給老師下載範例 CSV 的按鈕
+        # ==========================================
+        if os.path.exists(TEST_FILE_PATH):
+            with open(TEST_FILE_PATH, "rb") as file:
+                st.download_button(
+                    label="📥 點我下載測試範例檔案 (new_patients_test.csv)",
+                    data=file,
+                    file_name="new_patients_test.csv",
+                    mime="text/csv",
+                    help="點擊下載包含 5 筆未知癌症病患的基因表現量矩陣，可用於下方即時診斷測試。"
+                )
+        else:
+            st.info("💡 提示：未偵測到 new_patients_test.csv 範例檔，請確認檔案已同步至 GitHub 倉庫中。")
+            
+        st.markdown("---")
         
         uploaded_file = st.file_uploader("選擇上傳新病人基因數據 (.csv)", type=["csv"])
         
@@ -167,5 +210,7 @@ try:
             except Exception as e:
                 st.error(f"❌ 解析錯誤：請確保上傳的檔案格式與欄位名稱完全正確。詳細錯誤: {str(e)}")
 
+except Exception as e:
+    st.error(f"🚨 錯誤：讀取本機端資料發生異常。詳細錯誤訊息: {str(e)}")
 except Exception as e:
     st.error(f"🚨 錯誤：讀取本機端資料發生異常。詳細錯誤訊息: {str(e)}")
